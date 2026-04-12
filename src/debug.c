@@ -54,42 +54,68 @@ void debug_print_verses(SheetFile sheet)
 const char CHORD_START = '[';
 const char CHORD_END = ']';
 
-void debug_print_vers_line(SheetFile sheet, int versIdx)
+void debug_print_replaced_line(SheetFile sheet, PatFile pat, int versIdx)
 {
-    printf("--- Vers %i ---\n", versIdx + 1);
-    int versLine = 0;
+    printf("%s %i}\n", VERS_START, versIdx + 1);
+
     VersInfo vers = sheet.verses[versIdx];
-    Line line = vers.lines[versLine];
-
-    int chordIdx = 0;
-    bool withinChord = false;
-    bool chordLogged = false;
-
-    for (int cIdx = 0; cIdx < line.len; cIdx++)
+    for (int vLine = 0; vLine < vers.line_count; vLine++)
     {
-        char c = line.text[cIdx];
+        Line line = vers.lines[vLine];
+        assert(vLine < pat.lc_count);
+        LineChords lcs = pat.line_chords[vLine];
 
-        if (c == CHORD_START)
+        int chordIdx = 0;
+        bool withinChord = false;
+        bool noChange = false;
+        bool chordReplaced = false;
+        ChordInfo chord = {};
+
+        for (int cIdx = 0; cIdx < line.len; cIdx++)
         {
-            withinChord = true;
-        }
-        else if (c == CHORD_END)
-        {
-            withinChord = false;
-            chordLogged = false;
-            chordIdx++;
+            char c = line.text[cIdx];
+
+            if (c == CHORD_START)
+            {
+                withinChord = true;
+                if (chordIdx < lcs.chord_count)
+                {
+                    chord = lcs.chords[chordIdx];
+                }
+                else
+                {
+                    noChange = true;
+                }
+            }
+            else if (c == CHORD_END)
+            {
+                withinChord = false;
+                chordIdx++;
+
+                if (chord.remove || chordReplaced)
+                {
+                    chordReplaced = false;
+                    // skip here, because we have no other
+                    // way to exit right here
+                    continue;
+                }
+            }
+
+            if (withinChord && chord.remove)
+            {
+                // print nothing
+            }
+            else if (withinChord && !noChange && !chordReplaced)
+            {
+                printf("[%.*s]", chord.text.len, chord.text.chars);
+                chordReplaced = true;
+            }
+            else if (!chordReplaced)
+            {
+                putchar(c);
+            }
         }
 
-        if (withinChord && !chordLogged && c != CHORD_START)
-        {
-            printf("%i:", chordIdx);
-            chordLogged = true;
-        }
-
-        putchar(c);
+        printf("\n");
     }
-
-    printf("\n");
-
-    // printf("%.*s\n", vers.lines[versLine].len, vers.lines[versLine].text);
 }

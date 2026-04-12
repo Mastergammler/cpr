@@ -104,8 +104,6 @@ void parse_chords(PatFile* patFile)
     }
 }
 
-const char* VERS_START = "{comment: Vers";
-
 void parse_verses(SheetFile* sheet, Memory* mem)
 {
     str versStart = from_cstr(VERS_START);

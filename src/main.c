@@ -24,9 +24,12 @@ int main(int argc, char* argv[])
     printf("File of size %i, with %i lines\n", sheet.content.size,
            sheet.content.line_count);
     // debug_print_verses(sheet);
-    debug_print_vers_line(sheet, 1);
-    debug_print_lines(pat.content);
-    debug_print_pat(pat);
+
+    for (int i = 0; i < sheet.vers_count; i++)
+    {
+        debug_print_replaced_line(sheet, pat, i);
+    }
+    // debug_print_lines(pat.content);
 
     return 0;
 }
