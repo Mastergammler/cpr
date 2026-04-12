@@ -1,1 +1,5 @@
+#include "debug.c"
 #include "main.c"
+#include "memory.c"
+#include "parser.c"
+#include "strings.c"
