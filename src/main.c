@@ -1,147 +1,128 @@
+#include <assert.h>
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
-#define BUF_LEN 4096
-
-const char* VERS_MATCH = "{comment: Vers";
-
 typedef struct
 {
-    int comment_idx;
-    int vers_line;
+    void* mem;
+    int size;
+    int cursor;
 
-} VersInfo;
+} Arena;
 
-typedef struct
+void arena_alloc(Arena* arena, int size)
 {
-    const char* match_string;
-    int match_len;
-    int match_idx;
-    bool active;
-    bool found;
+    arena->size = size;
+    arena->cursor = 0;
+    arena->mem = malloc(size);
 
-} StrMatcher;
-
-typedef struct
-{
-    bool line_start;
-    bool within_vers;
-    int line_idx;
-    int cur_line_len;
-
-    StrMatcher line_start_matcher;
-    VersInfo cur_vers;
-
-} SheetPos;
-
-void reset_matcher(StrMatcher* matcher)
-{
-    matcher->found = false;
-    matcher->match_idx = 0;
+    assert(arena->mem);
 }
 
-void check_match(StrMatcher* matcher, char c)
+void arena_reset(Arena* arena)
 {
-    // ensure the index is always valid
-    bool charMatch = matcher->match_string[matcher->match_idx] == c;
-    if (charMatch)
+    arena->cursor = 0;
+}
+
+void* arena_use(Arena* arena, int size)
+{
+    assert(arena->cursor + size < arena->size);
+
+    void* memStart = arena->mem + arena->cursor;
+    arena->cursor += size;
+
+    return memStart;
+}
+
+typedef struct
+{
+    char* text;
+    int len;
+    int idx;
+    bool is_instruction;
+    bool is_empty;
+} SheetLine;
+
+typedef struct
+{
+    int size;
+    char* data;
+    int line_count;
+    SheetLine* lines;
+} SheetFile;
+
+typedef struct
+{
+    Arena strings;
+    Arena data;
+} Memory;
+
+void read_sheet(const char* fileName, Arena* strings, SheetFile* sheet)
+{
+    FILE* file = fopen(fileName, "r");
+
+    fseek(file, 0, SEEK_END);
+    sheet->size = ftell(file);
+    fseek(file, 0, SEEK_SET);
+
+    sheet->data = arena_use(strings, sheet->size);
+    fread(strings->mem, 1, sheet->size, file);
+    fclose(file);
+}
+
+void parse_into_lines(SheetFile* sheet, Memory* mem)
+{
+    SheetLine* cur;
+    sheet->line_count = 0;
+    bool nextLine = true;
+
+    for (int i = 0; i < sheet->size; i++)
     {
-        matcher->match_idx++;
-        if (matcher->match_idx >= matcher->match_len)
+        char c = sheet->data[i];
+        if (nextLine)
         {
-            matcher->found = true;
+            cur = (SheetLine*)arena_use(&mem->data, sizeof(SheetLine));
+            if (sheet->line_count == 0) sheet->lines = cur;
+
+            cur->text = &sheet->data[i];
+            nextLine = false;
+
+            if (c == '{') cur->is_instruction = true;
+        }
+
+        if (c == '\n')
+        {
+            cur->idx = sheet->line_count++;
+            cur->len = &sheet->data[i] - cur->text;
+            if (cur->len == 0) cur->is_empty = true;
+
+            nextLine = true;
         }
     }
-    else
-    {
-        matcher->active = false;
-        reset_matcher(matcher);
-    }
-}
-
-void on_line_start(SheetPos* pos)
-{
-    pos->line_start_matcher.active = true;
-    pos->line_start = false;
-    reset_matcher(&pos->line_start_matcher);
-
-    if (pos->cur_line_len == 0)
-    {
-        pos->within_vers = false;
-    }
-
-    if (pos->within_vers && (pos->line_idx > pos->cur_vers.comment_idx))
-    {
-        pos->cur_vers.vers_line = pos->line_idx;
-        printf("%2i: ", pos->cur_vers.vers_line);
-    }
-}
-
-void count_line_len(SheetPos* pos, char c)
-{
-    if (c != '\r' && c != '\n') pos->cur_line_len++;
-}
-
-void on_match_found(SheetPos* pos)
-{
-    printf("yay");
-    pos->cur_vers.vers_line = 0;
-    pos->cur_vers.comment_idx = pos->line_idx;
-    pos->within_vers = true;
-    reset_matcher(&pos->line_start_matcher);
 }
 
 int main(int argc, char* argv[])
 {
     printf("Welcome to CPR.\n");
+    SheetFile sheet = {};
+    Memory mem = {};
 
-    FILE* chordpro = fopen("res/test.chopro", "r");
+    arena_alloc(&mem.strings, 4096 * 2);
+    arena_alloc(&mem.data, 4096);
+    read_sheet("res/test.chopro", &mem.strings, &sheet);
+    parse_into_lines(&sheet, &mem);
 
-    char buffer[BUF_LEN];
-
-    SheetPos pos = {};
-    pos.line_start_matcher.match_string = VERS_MATCH;
-    pos.line_start_matcher.match_len =
-        strlen(pos.line_start_matcher.match_string);
-    pos.line_start_matcher.match_idx = 0;
-    pos.line_start_matcher.active = true;
-
-    int bytesRead;
-
-    while ((bytesRead = fread(buffer, 1, BUF_LEN, chordpro)) > 0)
+    printf("File of size %i, with %i lines\n", sheet.size, sheet.line_count);
+    for (int i = 0; i < sheet.line_count; i++)
     {
-        for (int i = 0; i < bytesRead; i++)
+        if (sheet.lines[i].is_instruction)
         {
-            char c = buffer[i];
-
-            count_line_len(&pos, c);
-
-            if (pos.line_start_matcher.active)
-            {
-                check_match(&pos.line_start_matcher, c);
-            }
-
-            if (pos.line_start_matcher.found)
-            {
-                on_match_found(&pos);
-            }
-
-            if (pos.line_start)
-            {
-                on_line_start(&pos);
-            }
-
-            putchar(c);
-            if (c == '\n')
-            {
-                pos.line_idx++;
-                pos.line_start = true;
-            }
+            printf("%.*s\n", sheet.lines[i].len, sheet.lines[i].text);
         }
     }
 
-    fclose(chordpro);
     return 0;
 }
