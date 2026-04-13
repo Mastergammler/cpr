@@ -1,3 +1,4 @@
 
 .build
 res/
+compile_commands.json

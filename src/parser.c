@@ -1,8 +1,8 @@
 #include "internal.h"
 
-FileInfo read_file(const char* fileName)
+FileInfo read_file(str fileName)
 {
-    FILE* file = fopen(fileName, "r");
+    FILE* file = fopen(fileName.chars, "r");
     FileInfo fi = {};
 
     fseek(file, 0, SEEK_END);
@@ -21,6 +21,7 @@ void parse_into_lines(LineFile* lineFile, Memory* mem)
     Line* cur;
     lineFile->line_count = 0;
     bool nextLine = true;
+    bool containsCr = false;
 
     for (int i = 0; i < lineFile->size; i++)
     {
@@ -34,14 +35,17 @@ void parse_into_lines(LineFile* lineFile, Memory* mem)
             nextLine = false;
 
             if (c == '{') cur->flags |= LF_INSTRUCTION;
+            if (c == '\r') containsCr = true;
         }
 
         if (c == '\n')
         {
             cur->idx = lineFile->line_count++;
             cur->len = &lineFile->data[i] - cur->text;
-            if (cur->len == 0) cur->flags |= LF_EMPTY;
+            if (cur->len == 0 || (cur->len == 1 && containsCr))
+                cur->flags |= LF_EMPTY;
 
+            containsCr = false;
             nextLine = true;
         }
     }
@@ -104,25 +108,117 @@ void parse_chords(PatFile* patFile)
     }
 }
 
-void parse_verses(SheetFile* sheet, Memory* mem)
+LineElement* new_element(ChordLine* chord, char* linePos)
 {
-    str versStart = from_cstr(VERS_START);
+    LineElement* el = arena_use(&Mem.data, sizeof(LineElement));
+    el->text = (str){.len = 0, .chars = linePos};
+    chord->count++;
 
-    bool withinVers = false;
-    VersInfo* cur;
+    if (!chord->elements) chord->elements = el;
+
+    return el;
+}
+
+void parse_section_chords(SectionInfo* section)
+{
+    for (int l = 0; l < section->line_count; l++)
+    {
+        ChordLine* chords = &section->chord_lines[l];
+        Line line = section->lines[l];
+
+        LineElement* el;
+
+        int chordIdx = 0;
+        int spaceIdx = 0;
+        int wordIdx = 0;
+        bool withinChord = false;
+        bool withinWord = false;
+
+        // NOTE: chords split words into 2 parts, if within the word
+        // -> so these count then as syllables
+
+        for (int cIdx = 0; cIdx < line.len; cIdx++)
+        {
+            char* c = &line.text[cIdx];
+            if (*c == CHORD_START)
+            {
+                el = new_element(chords, c);
+                el->type = ET_CHORD;
+                el->type_index = chordIdx++;
+
+                withinChord = true;
+            }
+            else if (*c == CHORD_END)
+            {
+                // chord end is inclusive
+                withinChord = false;
+            }
+            else if (!withinChord)
+            {
+                if (*c == WORD_SEP || *c == SILL_SEP)
+                {
+                    // new space type
+                    if (el->type != ET_SPACE)
+                    {
+                        el = new_element(chords, c);
+                        el->type = ET_SPACE;
+                        el->type_index = spaceIdx++;
+                    }
+                }
+                else // hanlde word
+                {
+                    if (el->type != ET_WORD)
+                    {
+                        el = new_element(chords, c);
+                        el->type = ET_WORD;
+                        el->type_index = wordIdx++;
+                    }
+                }
+            }
+
+            el->text.len++;
+        }
+    }
+}
+
+void parse_chord_lines(SheetFile* sheet)
+{
+    int totalChordLines = 0;
+    for (int sec = 0; sec < sheet->section_count; sec++)
+    {
+        totalChordLines += sheet->sections[sec].line_count;
+    }
+
+    ChordLine* firstLine =
+        arena_use(&Mem.data, sizeof(ChordLine) * totalChordLines);
+
+    for (int sec = 0; sec < sheet->section_count; sec++)
+    {
+        SectionInfo* section = &sheet->sections[sec];
+        section->chord_lines = firstLine + sec;
+        parse_section_chords(section);
+    }
+}
+
+void parse_chordpro(SheetFile* sheet, Memory* mem)
+{
+    str sectionStart = from_cstr(SECTION_START);
+
+    bool withinSection = false;
+    SectionInfo* cur;
     for (int i = 0; i < sheet->content.line_count; i++)
     {
         Line line = sheet->content.lines[i];
 
-        if (withinVers)
+        if (withinSection)
         {
             if (cur->line_count == 0) cur->lines = &sheet->content.lines[i];
 
             // end condition
             if (line.flags & LF_INSTRUCTION || line.flags & LF_EMPTY)
             {
-                withinVers = false;
-                sheet->vers_count++;
+                withinSection = false;
+                sheet->section_count++;
             }
             else
             {
@@ -130,17 +226,36 @@ void parse_verses(SheetFile* sheet, Memory* mem)
             }
         }
 
-        if (line.flags & LF_INSTRUCTION && starts_with(line.text, versStart))
+        if (line.flags & LF_INSTRUCTION)
         {
-            withinVers = true;
-            cur = arena_use(&mem->data, sizeof(VersInfo));
-            if (!sheet->verses) sheet->verses = cur;
-
-            // printf("%.*s\n", sheet->content.lines[i].len,
-            // sheet->content.lines[i].text);
+            if (starts_with(line.text, sectionStart))
+            {
+                withinSection = true;
+                cur = arena_use(&mem->transient, sizeof(SectionInfo));
+                if (!sheet->sections) sheet->sections = cur;
+                cur->instruction = line;
+            }
+            else
+            {
+                // we can not copy 2 array types simultaneously in the same
+                // memory slot
+                Metadata* meta = arena_use(&mem->data, sizeof(Metadata));
+                if (!sheet->meta) sheet->meta = meta;
+                meta->line = line;
+                sheet->metadata_count++;
+            }
         }
     }
 
     // no line after last vers
-    if (withinVers) sheet->vers_count++;
+    if (withinSection) sheet->section_count++;
+
+    int sectionsSize = sizeof(SectionInfo) * sheet->section_count;
+    SectionInfo* sections = arena_use(&mem->data, sectionsSize);
+    memcpy(sections, sheet->sections, sectionsSize);
+    sheet->sections = sections;
+
+    arena_reset(&mem->transient);
+
+    parse_chord_lines(sheet);
 }

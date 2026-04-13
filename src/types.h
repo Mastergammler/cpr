@@ -35,17 +35,44 @@ typedef struct
     int flags;
 } Line;
 
+typedef enum
+{
+    ET_INIT,
+    ET_CHORD,
+    ET_WORD,
+    ET_SPACE // ? does this make sense?
+} ElementType;
+
+typedef struct
+{
+    ElementType type;
+    /* index within the type */
+    int type_index;
+    str text;
+
+} LineElement;
+
+typedef struct
+{
+    LineElement* elements;
+    int count;
+} ChordLine;
+
 typedef struct
 {
     Arena strings;
     Arena data;
+    Arena transient;
+
 } Memory;
 
 typedef struct
 {
+    Line instruction;
     Line* lines;
+    ChordLine* chord_lines;
     int line_count;
-} VersInfo;
+} SectionInfo;
 
 typedef struct
 {
@@ -59,17 +86,28 @@ typedef struct
 
 typedef struct
 {
+    Line line;
+} Metadata;
+
+typedef struct
+{
     LineFile content;
 
-    int vers_count;
-    VersInfo* verses;
+    int metadata_count;
+    Metadata* meta;
+
+    int section_count;
+    SectionInfo* sections;
+
 } SheetFile;
 
 typedef struct
 {
-    int chord_idx;
     str text;
+    int chord_idx;
+    int word_pos;
     bool remove;
+    bool is_add;
 } ChordInfo;
 
 typedef struct
@@ -88,3 +126,27 @@ typedef struct
     int lc_count;
     LineChords* line_chords;
 } PatFile;
+
+typedef enum
+{
+    LS_INIT,
+    LS_CHORD,
+    LS_WORD,
+    LS_SPACE,
+    LS_CR
+
+} LineState;
+
+typedef struct
+{
+    LineState state;
+    int chord_idx;
+    int wordCount;
+
+    bool chord_replaced;
+    bool no_change;
+    bool no_print;
+    ChordInfo chord;
+    LineChords lcs;
+
+} LineStateData;
